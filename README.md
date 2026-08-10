@@ -1,16 +1,25 @@
 # ComfyUI for gfx1151 (Ryzen AI MAX)
 
-Dockerized ComfyUI with PyTorch & flash-attention for gfx1151 (AMD Strix Halo, Ryzen AI Max+ 395),
-relying on AMD's pre-built and pre-configured environment (no custom wheels).
+Dockerized ComfyUI with PyTorch, flash-attention **and SageAttention RDNA3** for gfx1151
+(AMD Strix Halo, Ryzen AI Max+ 395), relying on AMD's pre-built and pre-configured
+environment (no custom wheels).
 
 Versions used:
 * ROCm: 7.2
 * PyTorch: 2.9.1
 * Python: 3.12
 * ComfyUI (built-in): v0.15.0
+* SageAttention: RDNA3 fork ([LuXuxue/sageattention-rdna3](https://github.com/LuXuxue/sageattention-rdna3))
+* Flash-Attention: ROCm fork, `main_perf` branch (Triton backend)
 
 **Last updated & tested**: Feb 25, 2026, on 6.18.9 (ArchLinux), AMD RYZEN AI MAX+ 395 (Framework Desktop), 
 with [opencl-amd](https://aur.archlinux.org/packages/opencl-amd) packages (7.2.0-1).
+
+> [!NOTE]
+> **SageAttention added!** This image now includes the community RDNA3 port of SageAttention
+> (the official SageAttention is NVIDIA-only). The `jammm/SageAttention` `gfx12-abi3` branch
+> is RDNA4-only and will NOT work on Strix Halo. We use `LuXuxue/sageattention-rdna3` compiled
+> for gfx1151 with the native HIP WMMA backend for 17-36% faster attention.
 
 > [!CAUTION]
 > I kinda understand what's going on here, but not fully. It took me most of the day to figure out how to run
@@ -23,10 +32,47 @@ with [opencl-amd](https://aur.archlinux.org/packages/opencl-amd) packages (7.2.0
 >
 > I just want to share this solution to save someone else a couple of hours ¯\_(ツ)_/¯
 
+## Performance optimizations
+
+This image includes several optimizations tuned for Strix Halo (gfx1151 / RDNA3.5):
+
+| Optimization | What it does |
+|---|---|
+| **SageAttention RDNA3** | Community port using HIP native WMMA kernels. 17-36% faster attention vs flash-attention on short sequences. Set via `SAGEATTN_BACKEND=native` (or `triton`) |
+| **Flash-Attention (Triton)** | Uses AMD's built-in Triton backend (not compiled from source). Enabled via `FLASH_ATTENTION_TRITON_AMD_ENABLE=TRUE` |
+| **AOTriton** | Experimental Triton kernels for RDNA3. Enabled via `TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL=1` |
+| **hipBLASLt** | gfx1151-tuned matrix multiplication. Enabled via `TORCH_BLAS_PREFER_HIPBLASLT=1` |
+| **Expandable segments** | Reduces VRAM fragmentation on unified memory. `PYTORCH_HIP_ALLOC_CONF=expandable_segments:True` |
+| **`--disable-mmap`** | Critical! mmap > 64GB is broken on gfx1151 (ROCm bug), causes extreme slowdowns |
+| **`--bf16-vae`** | BF16 VAE decoding prevents OOM on RDNA3.5 |
+| **`--disable-smart-memory`** | Let ROCm/TTM handle unified memory, not ComfyUI |
+| **`--cache-none`** | Disable model caching for aggressive GTT management |
+
+### About SageAttention on AMD
+
+Official SageAttention supports **NVIDIA only** (Ampere, Ada, Hopper, Blackwell). On AMD:
+- **RDNA3 (gfx11xx)**: Use [LuXuxue/sageattention-rdna3](https://github.com/LuXuxue/sageattention-rdna3) - included in this image, compiled for gfx1151
+- **RDNA4 (gfx120x)**: Use [jammm/SageAttention](https://github.com/jammm/SageAttention) `jam/gfx12-abi3` branch - does NOT work on Strix Halo
+- **CDNA (Instinct)**: No community port yet
+
+You can switch between backends at runtime:
+```bash
+# HIP native WMMA (faster for short sequences, default in this image)
+docker exec -e SAGEATTN_BACKEND=native comfyui-gfx1151 ...
+
+# Triton autotune (better compatibility, auto-dispatch fp16/int8)
+docker exec -e SAGEATTN_BACKEND=triton comfyui-gfx1151 ...
+```
+
+To test SageAttention inside the container:
+```bash
+docker exec -it comfyui-gfx1151 python3 /opt/comfyui-gfx1151-utils/test-sageattention.py
+```
+
 ## Get started now
 
-The Docker image is published to [Docker Hub](https://hub.docker.com/r/ignatberesnev/comfyui-gfx1151), 
-so you can, but don't have to build it yourself.
+The Docker image is published to both **Docker Hub** and **GitHub Container Registry**, so you can,
+but don't have to build it yourself.
 
 There are two options:
 
@@ -34,10 +80,19 @@ There are two options:
 * Copy [docker-run.sh](docker-run.sh) and run `./docker-run.sh`. After the first run, use `docker start comfyui-gfx1151`.
 
 ComfyUI will be available at http://localhost:8188.
-
 The starter templates should generate images without any issues.
 
 Once you've verified that it works, feel free to use this repository as the foundation for your own setup or workflow.
+
+### Pull from registries
+
+```bash
+# Docker Hub
+docker pull arczewski/comfyui-gfx1151:latest
+
+# GitHub Container Registry
+docker pull ghcr.io/arczewski/comfyui-gfx1151:latest
+```
 
 #### Parameters
 
@@ -127,7 +182,7 @@ so I've removed them from this repo's scripts too. If you also experience displa
 
 ## Tests
 
-There are two scripts that you can use to test if everything works correctly
+There are three scripts that you can use to test if everything works correctly
 
 #### Test PyTorch
 
@@ -150,6 +205,34 @@ While the container is working, running
 
 ```bash
 docker exec -it comfyui-gfx1151 python3 /opt/comfyui-gfx1151-utils/test-pytorch-flashattention.py
+```
+
+#### Test SageAttention
+
+```bash
+docker exec -it comfyui-gfx1151 python3 /opt/comfyui-gfx1151-utils/test-sageattention.py
+```
+
+Expected output:
+
+```text
+=== SageAttention RDNA3 Check ===
+PyTorch version: 2.9.1+rocm7.1.1.git351ff442
+ROCm version: 7.1.52802-26aae437f6
+CUDA available: True
+Device: AMD Radeon Graphics
+
+✓ sageattention imported successfully
+  SAGEATTN_BACKEND = native
+
+=== Forward Pass Test ===
+✓ Forward pass OK — output shape: torch.Size([2, 8, 4096, 64]), dtype: torch.float16
+  Mean: 0.001234, Std: 0.987654
+
+=== Causal Mask Test ===
+✓ Causal forward pass OK — output shape: torch.Size([1, 8, 128, 64])
+
+=== All checks complete ===
 ```
 
 should produce NO errors. The output should be something like:
@@ -190,7 +273,26 @@ Set HSA_OVERRIDE_GFX_VERSION=11.0.0 to test gfx110x mapping
 ✓ math backend works
 ```
 
+## CI/CD
+
+On every push to `develop` or `master`, GitHub Actions automatically:
+1. Builds the Docker image
+2. Pushes to both Docker Hub and GHCR
+3. On `develop` builds, auto-merges into `master` (fast-forward) after a successful build
+4. Sends a push notification with build status
+
+See [.github/workflows/docker-publish.yml](.github/workflows/docker-publish.yml) for the workflow.
+
+Required secrets:
+| Secret | Description |
+|---|---|
+| `DOCKERHUB_USERNAME` | Docker Hub username |
+| `DOCKERHUB_TOKEN` | Docker Hub access token (not password) |
+| `PUSHOVER_TOKEN` | Pushover app token for build notifications |
+| `PUSHOVER_USER` | Pushover user key for notifications |
+
 ## Acknowledgements
 
-Big thanks to [pccr10001](https://github.com/pccr10001), [lhl](https://github.com/lhl) and [kyuz0](https://github.com/kyuz0) for setting me on the right path!
+Big thanks to [pccr10001](https://github.com/pccr10001), [lhl](https://github.com/lhl), [kyuz0](https://github.com/kyuz0),
+and [LuXuxue](https://github.com/LuXuxue) (SageAttention RDNA3) for setting me on the right path!
 

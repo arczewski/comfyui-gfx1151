@@ -1,9 +1,14 @@
 #
 # Repo with the Dockerfile:
+#   https://github.com/arczewski/comfyui-gfx1151
+#
+# Image is published to both Docker Hub and GHCR:
+#   docker.io/arczewski/comfyui-gfx1151:latest
+#   ghcr.io/arczewski/comfyui-gfx1151:latest
 #
 services:
   comfyui:
-    image: ignatberesnev/comfyui-gfx1151:v0.2
+    image: arczewski/comfyui-gfx1151:latest
     container_name: comfyui-gfx1151
 
     # Shared memory allocation, should not be > than available RAM, feel free to lower it
@@ -15,8 +20,21 @@ services:
     ports:
       - "8188:8188"
 
+    # -------------------------------------------------------------------
+    # Environment variables (all set as ENV in Dockerfile, listed here
+    # for visibility and to allow overrides without rebuilding)
+    # -------------------------------------------------------------------
     environment:
+      # Enable Triton-backed flash-attention on AMD
+      - FLASH_ATTENTION_TRITON_AMD_ENABLE=TRUE
+      # Enable experimental AOTriton kernels for RDNA3
       - TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL=1
+      # Prefer hipBLASLt (tuned for gfx1151) over standard hipBLAS
+      - TORCH_BLAS_PREFER_HIPBLASLT=1
+      # Reduce VRAM fragmentation on unified memory
+      - PYTORCH_HIP_ALLOC_CONF=expandable_segments:True
+      # SageAttention backend: "native" (HIP WMMA) or "triton"
+      - SAGEATTN_BACKEND=native
 
     devices:
       - /dev/kfd:/dev/kfd
