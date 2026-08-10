@@ -42,12 +42,20 @@ RUN cd /opt && \
 # - LuXuxue/sageattention-rdna3 is the RDNA3 fork that works on gfx1151
 # - Two backends: 'triton' (default) and 'native' (HIP WMMA, 17-36% faster)
 # - We use SAGEATTN_BACKEND=native (set above) for best perf on short sequences
+#
+# NOTE: This fork may fail to build against newer ROCm/PyTorch versions.
+# If it fails, the image still works with flash-attention alone.
+# To attempt a manual install later from inside the container:
+#   cd /opt/sageattention-rdna3 && GPU_ARCHS=gfx1151 pip install . --no-build-isolation
 # -------------------------------------------------------------------
 
 RUN cd /opt && \
     git clone https://github.com/LuXuxue/sageattention-rdna3.git && \
     cd sageattention-rdna3 && \
-    GPU_ARCHS=gfx1151 pip install . --no-build-isolation
+    (GPU_ARCHS=gfx1151 pip install . --no-build-isolation 2>&1 || \
+     (echo "WARNING: --no-build-isolation failed, retrying with build isolation..." && \
+      GPU_ARCHS=gfx1151 pip install . 2>&1) || \
+     echo "WARNING: SageAttention build failed, continuing without it. The image still has flash-attention.")
 
 # Cloning and installing ComfyUI in case the user doesn't provide their own
 # - Nothing unusual here afaik
