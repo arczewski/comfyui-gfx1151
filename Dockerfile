@@ -43,19 +43,23 @@ RUN cd /opt && \
 # - Two backends: 'triton' (default) and 'native' (HIP WMMA, 17-36% faster)
 # - We use SAGEATTN_BACKEND=native (set above) for best perf on short sequences
 #
-# NOTE: This fork may fail to build against newer ROCm/PyTorch versions.
-# If it fails, the image still works with flash-attention alone.
-# To attempt a manual install later from inside the container:
-#   cd /opt/sageattention-rdna3 && GPU_ARCHS=gfx1151 pip install . --no-build-isolation
+# Build notes:
+#   ROCM_HOME must be set explicitly (pip's isolated metadata phase needs it)
+#   GPU_ARCHS=gfx1151 targets Strix Halo
+#   --no-build-isolation is required for HIP headers via PyTorch
 # -------------------------------------------------------------------
 
 RUN cd /opt && \
     git clone https://github.com/LuXuxue/sageattention-rdna3.git && \
     cd sageattention-rdna3 && \
-    (GPU_ARCHS=gfx1151 pip install . --no-build-isolation 2>&1 || \
-     (echo "WARNING: --no-build-isolation failed, retrying with build isolation..." && \
-      GPU_ARCHS=gfx1151 pip install . 2>&1) || \
-     echo "WARNING: SageAttention build failed, continuing without it. The image still has flash-attention.")
+    echo "Patching __hip_bfloat16 -> hip_bfloat16 for ROCm 7.2 compatibility..." && \
+    find csrc -type f \( -name '*.cu' -o -name '*.h' -o -name '*.cuh' -o -name '*.cpp' \) \
+        -exec sed -i 's/__hip_bfloat16/hip_bfloat16/g' {} + && \
+    export GPU_ARCHS=gfx1151 && \
+    export ROCM_HOME=$(python3 -c "import torch.utils.cpp_extension; print(torch.utils.cpp_extension.ROCM_HOME)") && \
+    echo "ROCM_HOME=$ROCM_HOME" && \
+    echo "GPU_ARCHS=$GPU_ARCHS" && \
+    python setup.py install 2>&1 | tail -20
 
 # Cloning and installing ComfyUI in case the user doesn't provide their own
 # - Nothing unusual here afaik
