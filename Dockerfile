@@ -95,7 +95,7 @@ RUN chmod +x test-sageattention.py
 #                              causes extreme slowdowns and hangs
 #   --disable-smart-memory     Let ROCm/TTM handle unified memory, not ComfyUI
 #   --bf16-vae                 BF16 VAE decoding prevents OOM on RDNA3.5
-#   --cache-none               Disable model caching for aggressive GTT management
+#   --highvram                  Keep all models in VRAM, never unload
 # -------------------------------------------------------------------
 
 EXPOSE 8188
@@ -108,4 +108,4 @@ CMD /opt/comfyui-gfx1151-utils/check-comfyui.sh && \
         --disable-mmap \
         --disable-smart-memory \
         --bf16-vae \
-        --cache-none
+        --highvram
