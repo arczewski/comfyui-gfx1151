@@ -33,8 +33,8 @@ services:
       - TORCH_BLAS_PREFER_HIPBLASLT=1
       # Reduce VRAM fragmentation on unified memory
       - PYTORCH_HIP_ALLOC_CONF=expandable_segments:True
-      # SageAttention backend: "native" (HIP WMMA) or "triton"
-      - SAGEATTN_BACKEND=native
+      # SageAttention backend: "triton" (Triton JIT, default) or "native" (HIP WMMA)
+      - SAGEATTN_BACKEND=triton
 
     devices:
       - /dev/kfd:/dev/kfd

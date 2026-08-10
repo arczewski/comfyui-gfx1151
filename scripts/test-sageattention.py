@@ -34,6 +34,13 @@ except ImportError as e:
 backend = os.environ.get("SAGEATTN_BACKEND", "triton")
 print(f"  SAGEATTN_BACKEND = {backend}")
 
+# Check if native extension is available
+try:
+    import sageattention._qattn_gfx11
+    print("  Native HIP extension: AVAILABLE")
+except ImportError:
+    print("  Native HIP extension: not built (Triton-only mode)")
+
 # Run forward pass
 print()
 print("=== Forward Pass Test ===")

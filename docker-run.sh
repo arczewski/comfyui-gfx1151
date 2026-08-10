@@ -12,7 +12,7 @@ docker run -it \
   -e TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL=1 \
   -e TORCH_BLAS_PREFER_HIPBLASLT=1 \
   -e PYTORCH_HIP_ALLOC_CONF=expandable_segments:True \
-  -e SAGEATTN_BACKEND=native \
+  -e SAGEATTN_BACKEND=triton \
   -p 8188:8188 \
   -v $(pwd)/ComfyUI:/opt/ComfyUI \
   --shm-size 8G \

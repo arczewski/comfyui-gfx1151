@@ -16,8 +16,9 @@ ENV TORCH_BLAS_PREFER_HIPBLASLT=1
 # Use expandable memory segments to reduce VRAM fragmentation on unified memory
 ENV PYTORCH_HIP_ALLOC_CONF=expandable_segments:True
 
-# SageAttention: use native HIP WMMA backend (faster than Triton for short sequences)
-ENV SAGEATTN_BACKEND=native
+# SageAttention backend: "triton" (works without HIP compilation, default) or "native"
+# We use "triton" since the native HIP extension uses APIs removed in ROCm 7.2
+ENV SAGEATTN_BACKEND=triton
 
 # -------------------------------------------------------------------
 # "Installing" flash-attention
@@ -40,26 +41,21 @@ RUN cd /opt && \
 # - Official SageAttention is NVIDIA-only (Ampere/Ada/Hopper/Blackwell)
 # - jammm/SageAttention jam/gfx12-abi3 branch is RDNA4-only (gfx120x)
 # - LuXuxue/sageattention-rdna3 is the RDNA3 fork that works on gfx1151
-# - Two backends: 'triton' (default) and 'native' (HIP WMMA, 17-36% faster)
-# - We use SAGEATTN_BACKEND=native (set above) for best perf on short sequences
+# - Two backends: 'triton' (default, pure Triton JIT) and 'native' (HIP WMMA)
 #
-# Build notes:
-#   ROCM_HOME must be set explicitly (pip's isolated metadata phase needs it)
-#   GPU_ARCHS=gfx1151 targets Strix Halo
-#   --no-build-isolation is required for HIP headers via PyTorch
+# We skip the native HIP extension (SAGEATTN_SKIP_BUILD=1) because:
+#   1. The HIP code uses APIs renamed in ROCm 7.2 (__hip_bfloat16, __bfloat162float)
+#   2. Triton backend auto-tunes for gfx1151 without any HIP compilation
+#   3. Native backend is faster for short sequences but requires ROCm 7.14+
+#   To build the native backend manually:
+#     docker exec comfyui-gfx1151 bash -c 'cd /opt/sageattention-rdna3 && GPU_ARCHS=gfx1151 pip install . --no-build-isolation'
 # -------------------------------------------------------------------
 
 RUN cd /opt && \
     git clone https://github.com/LuXuxue/sageattention-rdna3.git && \
     cd sageattention-rdna3 && \
-    echo "Patching __hip_bfloat16 -> hip_bfloat16 for ROCm 7.2 compatibility..." && \
-    find csrc -type f \( -name '*.cu' -o -name '*.h' -o -name '*.cuh' -o -name '*.cpp' \) \
-        -exec sed -i 's/__hip_bfloat16/hip_bfloat16/g' {} + && \
-    export GPU_ARCHS=gfx1151 && \
-    export ROCM_HOME=$(python3 -c "import torch.utils.cpp_extension; print(torch.utils.cpp_extension.ROCM_HOME)") && \
-    echo "ROCM_HOME=$ROCM_HOME" && \
-    echo "GPU_ARCHS=$GPU_ARCHS" && \
-    python setup.py install 2>&1 | tail -20
+    SAGEATTN_SKIP_BUILD=1 pip install . --no-build-isolation 2>&1 | tail -3 && \
+    python3 -c "from sageattention import sageattn; print('SageAttention (Triton backend) installed successfully')"
 
 # Cloning and installing ComfyUI in case the user doesn't provide their own
 # - Nothing unusual here afaik
