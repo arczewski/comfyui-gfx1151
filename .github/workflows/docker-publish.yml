@@ -14,11 +14,6 @@ on:
     tags:
       - 'v*'
   workflow_dispatch:
-    inputs:
-      branch:
-        description: 'Branch to build from'
-        required: false
-        default: 'develop'
 
 permissions:
   contents: read
@@ -35,10 +30,9 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      # --- Build metadata (tags/labels) ---
-      # Always build GHCR tags; conditionally add Docker Hub tags
+      # --- Build metadata ---
       - name: Docker meta (GHCR)
-        id: meta-ghcr
+        id: meta
         uses: docker/metadata-action@v5
         with:
           images: ghcr.io/${{ github.repository }}
@@ -47,26 +41,8 @@ jobs:
             type=ref,event=tag,pattern={{version}}
             type=raw,value=latest,enable=${{ github.ref == 'refs/heads/master' }}
             type=sha,prefix=,format=short
-          flavor: |
-            latest=false
 
-      - name: Docker meta (Docker Hub)
-        id: meta-dockerhub
-        if: env.DOCKERHUB_USERNAME != ''
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ secrets.DOCKERHUB_USERNAME }}/${{ github.event.repository.name }}
-          tags: |
-            type=ref,event=branch,pattern={{branch}}
-            type=ref,event=tag,pattern={{version}}
-            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/master' }}
-            type=sha,prefix=,format=short
-          flavor: |
-            latest=false
-        env:
-          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
-
-      # --- Registry logins ---
+      # --- Registry login ---
       - name: Login to GHCR
         uses: docker/login-action@v3
         with:
@@ -74,36 +50,49 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # --- Docker Hub (optional) ---
       - name: Login to Docker Hub
-        if: env.DOCKERHUB_USERNAME != ''
+        id: dockerhub-login
+        continue-on-error: true
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
-        env:
-          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+
+      - name: Docker Hub tags
+        id: dh-tags
+        if: steps.dockerhub-login.outcome == 'success'
+        run: |
+          # Generate Docker Hub tags matching GHCR pattern
+          REPO="${{ secrets.DOCKERHUB_USERNAME }}/${{ github.event.repository.name }}"
+          BRANCH="${{ github.ref_name }}"
+          SHA="$(echo '${{ github.sha }}' | cut -c1-7)"
+          TAGS="${REPO}:${BRANCH}"
+          TAGS="${TAGS},${REPO}:${SHA}"
+          if [ "$BRANCH" = "master" ]; then
+            TAGS="${TAGS},${REPO}:latest"
+          fi
+          echo "tags=${TAGS}" >> $GITHUB_OUTPUT
+
+      - name: Combine all tags
+        id: combined
+        run: |
+          ALL_TAGS="${{ steps.meta.outputs.tags }}"
+          if [ -n "${{ steps.dh-tags.outputs.tags }}" ]; then
+            ALL_TAGS="${ALL_TAGS}"$'\n'"${{ steps.dh-tags.outputs.tags }}"
+          fi
+          # Multi-line output needs heredoc syntax
+          { echo "tags<<TAGEOF"; echo "${ALL_TAGS}"; echo "TAGEOF"; } >> $GITHUB_OUTPUT
 
       # --- Build & push ---
-      - name: Combine tags
-        id: tags
-        run: |
-          TAGS="${{ steps.meta-ghcr.outputs.tags }}"
-          if [ -n "${{ steps.meta-dockerhub.outputs.tags }}" ]; then
-            TAGS="$TAGS"$'\n'"${{ steps.meta-dockerhub.outputs.tags }}"
-          fi
-          # Output as comma-separated for docker/build-push
-          TAGS_CSV="$(echo "$TAGS" | tr '\n' ',' | sed 's/,$//')"
-          echo "tags=$TAGS_CSV" >> $GITHUB_OUTPUT
-          echo "ghcr_tags=${{ steps.meta-ghcr.outputs.tags }}" >> $GITHUB_OUTPUT
-
       - name: Build and push
         id: build
         uses: docker/build-push-action@v6
         with:
           context: .
           push: true
-          tags: ${{ steps.tags.outputs.tags }}
-          labels: ${{ steps.meta-ghcr.outputs.labels }}
+          tags: ${{ steps.combined.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
           platforms: linux/amd64
@@ -115,15 +104,14 @@ jobs:
           curl -s --form-string "token=${{ secrets.PUSHOVER_TOKEN }}" \
                --form-string "user=${{ secrets.PUSHOVER_USER }}" \
                --form-string "title=❌ ComfyUI-gfx1151 Build FAILED" \
-               --form-string "message=Build failed on <b>${{ github.ref_name }}</b> (${{ github.sha }})&#10;<a href=\"${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}\">Workflow run</a>" \
+               --form-string "message=Build failed on <b>${{ github.ref_name }}</b>&#10;Commit: <b>$(echo '${{ github.sha }}' | cut -c1-7)</b>&#10;<a href=\"${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}\">Workflow run</a>" \
                --form-string "priority=1" \
                --form-string "sound=siren" \
                --form-string "html=1" \
                https://api.pushover.net/1/messages.json
 
   # ──────────────────────────────────────────────
-  # Auto-merge: after successful develop build,
-  # fast-forward merge develop -> master
+  # Auto-merge develop -> master after success
   # ──────────────────────────────────────────────
   auto-merge:
     needs: build-and-push
@@ -163,21 +151,20 @@ jobs:
           if [ "$TAG" = "master" ]; then
             TAG="latest"
           fi
+          SHA="$(echo '${{ github.sha }}' | cut -c1-7)"
 
-          # Build the message with links to both registries
-          MESSAGE="Image <b>ghcr.io/${{ github.repository }}:$TAG</b> pushed successfully&#10;Branch: <b>${{ github.ref_name }}</b>&#10;Commit: <b>$(echo '${{ github.sha }}' | cut -c1-7)</b>"
+          MSG="Image <b>ghcr.io/${{ github.repository }}:${TAG}</b> published&#10;Branch: <b>${{ github.ref_name }}</b>&#10;Commit: <b>${SHA}</b>"
 
-          # Add Docker Hub info if available
           if [ -n "${{ secrets.DOCKERHUB_USERNAME }}" ]; then
-            MESSAGE="$MESSAGE&#10;Docker Hub: <b>${{ secrets.DOCKERHUB_USERNAME }}/comfyui-gfx1151:$TAG</b>"
+            MSG="${MSG}&#10;Docker Hub: <b>${{ secrets.DOCKERHUB_USERNAME }}/comfyui-gfx1151:${TAG}</b>"
           fi
 
-          MESSAGE="$MESSAGE&#10;<a href=\"${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}\">Workflow run</a>"
+          MSG="${MSG}&#10;<a href=\"${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}\">Workflow run</a>"
 
           curl -s --form-string "token=${{ secrets.PUSHOVER_TOKEN }}" \
                --form-string "user=${{ secrets.PUSHOVER_USER }}" \
                --form-string "title=✅ ComfyUI-gfx1151 Built & Published" \
-               --form-string "message=$MESSAGE" \
+               --form-string "message=${MSG}" \
                --form-string "priority=0" \
                --form-string "sound=magic" \
                --form-string "html=1" \
