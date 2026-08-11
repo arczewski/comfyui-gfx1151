@@ -1,6 +1,15 @@
 FROM rocm/pytorch:rocm7.2_ubuntu24.04_py3.12_pytorch_release_2.9.1
 
 # -------------------------------------------------------------------
+# Create a dedicated Python virtual environment
+#   - --system-site-packages gives access to the base image's PyTorch/ROCm
+#   - Everything else (flash-attn, sageattn, ComfyUI deps) is installed here
+# -------------------------------------------------------------------
+RUN python3 -m venv /opt/venv --system-site-packages
+ENV PATH="/opt/venv/bin:$PATH"
+ENV VIRTUAL_ENV="/opt/venv"
+
+# -------------------------------------------------------------------
 # Performance environment variables for Strix Halo (gfx1151 / RDNA3.5)
 # -------------------------------------------------------------------
 
@@ -55,7 +64,7 @@ RUN cd /opt && \
     git clone https://github.com/LuXuxue/sageattention-rdna3.git && \
     cd sageattention-rdna3 && \
     SAGEATTN_SKIP_BUILD=1 pip install . --no-build-isolation 2>&1 | tail -3 && \
-    python3 -c "from sageattention import sageattn; print('SageAttention (Triton backend) installed successfully')"
+    python -c "from sageattention import sageattn; print('SageAttention (Triton backend) installed successfully')"
 
 # Cloning and installing ComfyUI in case the user doesn't provide their own
 # - Nothing unusual here afaik
@@ -63,7 +72,7 @@ RUN cd /opt && \
 RUN cd /opt && \
     git clone https://github.com/comfyanonymous/ComfyUI ComfyUI-pre-cloned && \
     cd ComfyUI-pre-cloned && \
-    pip3 install -r requirements.txt
+    pip install -r requirements.txt
 
 # Some utilities to make life/debugging easier
 # Feel free to remove these if you're building from scratch locally.
@@ -90,22 +99,26 @@ RUN chmod +x test-sageattention.py
 # Flags explained:
 #   --listen 0.0.0.0          Accept connections from any host
 #   --use-flash-attention      Use Triton-backed flash-attention (set up above)
-#   --gpu-only                 Force execution on APU compute units (not CPU fallback)
+#   --gpu-only                 Keep everything on GPU (text encoders, VAE, CLIP).
+#                              Sets HIGH_VRAM internally - models stay loaded.
+#                              NOTE: --gpu-only and --highvram are mutually
+#                              exclusive; --gpu-only is the stronger option.
 #   --disable-mmap             CRITICAL: mmap > 64GB is broken on gfx1151 (ROCm bug),
 #                              causes extreme slowdowns and hangs
 #   --disable-smart-memory     Let ROCm/TTM handle unified memory, not ComfyUI
 #   --bf16-vae                 BF16 VAE decoding prevents OOM on RDNA3.5
-#   --highvram                  Keep all models in VRAM, never unload
+#
+# Removed: --cache-none (was causing models to unload between runs)
+# Removed: --highvram (mutually exclusive with --gpu-only)
 # -------------------------------------------------------------------
 
 EXPOSE 8188
 
 CMD /opt/comfyui-gfx1151-utils/check-comfyui.sh && \
-    python3 /opt/ComfyUI/main.py \
+    python /opt/ComfyUI/main.py \
         --listen 0.0.0.0 \
         --use-flash-attention \
         --gpu-only \
         --disable-mmap \
         --disable-smart-memory \
-        --bf16-vae \
-        --highvram
+        --bf16-vae
