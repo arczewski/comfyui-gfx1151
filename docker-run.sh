@@ -15,6 +15,7 @@ docker run -it \
   -e SAGEATTN_BACKEND=triton \
   -p 8188:8188 \
   -v $(pwd)/ComfyUI:/opt/ComfyUI \
+  -v $(pwd)/venv:/opt/venv \
   --shm-size 8G \
   --name comfyui-gfx1151 \
   arczewski/comfyui-gfx1151:latest

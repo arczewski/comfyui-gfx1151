@@ -16,6 +16,7 @@ services:
 
     volumes:
       - ./ComfyUI:/opt/ComfyUI
+      - ./venv:/opt/venv
 
     ports:
       - "8188:8188"

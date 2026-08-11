@@ -4,6 +4,9 @@ FROM rocm/pytorch:rocm7.2_ubuntu24.04_py3.12_pytorch_release_2.9.1
 # Create a dedicated Python virtual environment
 #   - --system-site-packages gives access to the base image's PyTorch/ROCm
 #   - Everything else (flash-attn, sageattn, ComfyUI deps) is installed here
+#   - The venv is tarred at build time and extracted at first run into the
+#     host-mounted /opt/venv (see check-comfyui.sh). This way custom nodes
+#     can pip install at runtime and packages survive container restarts.
 # -------------------------------------------------------------------
 RUN python3 -m venv /opt/venv --system-site-packages
 ENV PATH="/opt/venv/bin:$PATH"
@@ -77,6 +80,10 @@ RUN cd /opt && \
 # Some utilities to make life/debugging easier
 # Feel free to remove these if you're building from scratch locally.
 
+# Package the venv so it can be extracted into a host-mounted directory at runtime.
+# If the user mounts ./venv:/opt/venv, the tarball is extracted on first run.
+RUN tar czf /opt/venv-template.tar.gz -C /opt venv
+
 RUN mkdir -p /opt/comfyui-gfx1151-utils
 
 WORKDIR /opt/comfyui-gfx1151-utils
@@ -115,6 +122,7 @@ RUN chmod +x test-sageattention.py
 EXPOSE 8188
 
 CMD /opt/comfyui-gfx1151-utils/check-comfyui.sh && \
+    export PATH="/opt/venv/bin:$PATH" && \
     python /opt/ComfyUI/main.py \
         --listen 0.0.0.0 \
         --use-flash-attention \
